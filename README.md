@@ -35,7 +35,7 @@ import nanogcg
 import torch
 
 from nanogcg import GCGConfig
-from transformers import AutoModelForCausaulLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_id = "mistralai/Mistral-7B-Instruct-v0.2"
 model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16).to("cuda:0")
