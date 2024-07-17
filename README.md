@@ -98,7 +98,7 @@ import torch
 from transformers import AutoModelForCausaulLM, AutoTokenizer
 
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
-model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to("cuda:0")
+model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to("cuda")
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 
 messages = [
