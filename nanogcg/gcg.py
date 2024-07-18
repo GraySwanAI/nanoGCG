@@ -1,8 +1,9 @@
+import copy
 import gc
 
 from dataclasses import dataclass
 from tqdm import tqdm
-from typing import List, Union
+from typing import List, Optional, Union
 
 import torch
 import transformers
@@ -183,6 +184,8 @@ class GCG:
     
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
+        else:
+            messages = copy.deepcopy(messages)
     
         # Append the GCG string at the end of the prompt if location not specified
         if not any(["{optim_str}" in d["content"] for d in messages]):
@@ -431,7 +434,7 @@ def run(
     tokenizer: transformers.PreTrainedTokenizer,
     messages: Union[str, List[dict]],
     target: str,
-    config: GCGConfig = None, 
+    config: Optional[GCGConfig] = None, 
 ) -> GCGResult:
     """Generates a single optimized string using GCG. 
 
