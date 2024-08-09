@@ -269,11 +269,8 @@ class GCG:
             optim_str = tokenizer.batch_decode(optim_ids)[0]
             optim_strings.append(optim_str)
 
-            if not config.verbose:
-                print(f"step: {i+1}\noptim_str: {optim_str}\nloss: {current_loss}")
-            else:
-                print(f"step: {i+1}")
-                buffer.print_buffer(tokenizer)
+            if config.verbose:
+                buffer.print_buffer(tokenizer)                
 
         min_loss_index = losses.index(min(losses)) 
 
