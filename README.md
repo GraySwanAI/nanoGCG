@@ -75,6 +75,8 @@ The parameters that can be configured and their defaults are:
 
 - `mellowmax_alpha: float = 1.0` - the value of the alpha parameter used in the mellowmax loss function
 
+- `use_prefix_cache: bool = True ` - if True, stores the KV cache for all token positions before the optimized tokens
+
 - `allow_non_ascii : bool = False` - if True, allows for non-ascii tokens to be used
 
 - `filter_ids: bool = True` - if True, only retains candidate sequences that are the same after tokenization and retokenization
@@ -120,7 +122,7 @@ nanoGCG is licensed under the MIT license.
 
 ```
 [1] https://arxiv.org/pdf/2307.15043
-[2] https://blog.haizelabs.com/posts/acg/
+[2] https://blog.haizelabs.com/posts/acg
 [3] https://arxiv.org/pdf/2402.12329
 [4] https://confirmlabs.org/posts/TDC2023
 [5] https://arxiv.org/pdf/1612.05628

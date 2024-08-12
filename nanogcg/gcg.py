@@ -31,6 +31,7 @@ class GCGConfig:
     buffer_size: int = 0
     use_mellowmax: bool = False
     mellowmax_alpha: float = 1.0
+    use_prefix_cache: bool = True
     allow_non_ascii: bool = False
     filter_ids: bool = True
     add_space_before_target: bool = False
@@ -162,7 +163,7 @@ class GCG:
         self, 
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
-        config: GCGConfig
+        config: GCGConfig,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -170,6 +171,7 @@ class GCG:
 
         self.embedding_layer = model.get_input_embeddings()
         self.not_allowed_ids = None if config.allow_non_ascii else get_nonascii_toks(tokenizer, device=model.device)
+        self.prefix_cache = None
 
         if model.dtype in (torch.float32, torch.float64):
             logger.warning(f"Model is in {model.dtype}. Use a lower precision data type, if possible, for much faster optimization.")
@@ -217,9 +219,12 @@ class GCG:
         before_embeds, after_embeds, target_embeds = [embedding_layer(ids) for ids in (before_ids, after_ids, target_ids)]
 
         # Compute the KV Cache for tokens that appear before the optimized tokens
-        with torch.no_grad():
-            output = model(inputs_embeds=before_embeds, use_cache=True)
-            self.prefix_cache = output.past_key_values
+        if config.use_prefix_cache:
+            with torch.no_grad():
+                output = model(inputs_embeds=before_embeds, use_cache=True)
+                self.prefix_cache = output.past_key_values
+        else:
+            self.before_embeds = before_embeds
         
         self.target_ids = target_ids
         self.after_embeds = after_embeds
@@ -234,7 +239,7 @@ class GCG:
         
         for _ in tqdm(range(config.num_steps)):
             # Compute the token gradient
-            optim_ids_onehot_grad = self.compute_token_gradient(optim_ids, target_ids) 
+            optim_ids_onehot_grad = self.compute_token_gradient(optim_ids) 
 
             with torch.no_grad():
 
@@ -255,15 +260,20 @@ class GCG:
 
                 # Compute loss on all candidate sequences 
                 batch_size = new_search_width if config.batch_size is None else config.batch_size
-                input_embeds = torch.cat([
-                    embedding_layer(sampled_ids),
-                    after_embeds.repeat(new_search_width, 1, 1),
-                    target_embeds.repeat(new_search_width, 1, 1)
-                ], dim=1)
-                loss = find_executable_batch_size(self.compute_candidates_loss, batch_size)(
-                    input_embeds,
-                    target_ids
-                )
+                if self.prefix_cache:
+                    input_embeds = torch.cat([
+                        embedding_layer(sampled_ids),
+                        after_embeds.repeat(new_search_width, 1, 1),
+                        target_embeds.repeat(new_search_width, 1, 1),
+                    ], dim=1)
+                else:
+                    input_embeds = torch.cat([
+                        before_embeds.repeat(new_search_width, 1, 1),
+                        embedding_layer(sampled_ids),
+                        after_embeds.repeat(new_search_width, 1, 1),
+                        target_embeds.repeat(new_search_width, 1, 1),
+                    ], dim=1)
+                loss = find_executable_batch_size(self.compute_candidates_loss, batch_size)(input_embeds)
 
                 current_loss = loss.min().item()
                 optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
@@ -320,15 +330,21 @@ class GCG:
         true_buffer_size = max(1, config.buffer_size) 
 
         # Compute the loss on the initial buffer entries
-        init_buffer_embeds = torch.cat([
-            self.embedding_layer(init_buffer_ids),
-            self.after_embeds.repeat(true_buffer_size, 1, 1),
-            self.target_embeds.repeat(true_buffer_size, 1, 1),
-        ], dim=1)
-        init_buffer_losses = find_executable_batch_size(self.compute_candidates_loss, true_buffer_size)(
-            init_buffer_embeds,
-            self.target_ids,
-        )
+        if self.prefix_cache:
+            init_buffer_embeds = torch.cat([
+                self.embedding_layer(init_buffer_ids),
+                self.after_embeds.repeat(true_buffer_size, 1, 1),
+                self.target_embeds.repeat(true_buffer_size, 1, 1),
+            ], dim=1)
+        else:
+            init_buffer_embeds = torch.cat([
+                self.before_embeds.repeat(true_buffer_size, 1, 1),
+                self.embedding_layer(init_buffer_ids),
+                self.after_embeds.repeat(true_buffer_size, 1, 1),
+                self.target_embeds.repeat(true_buffer_size, 1, 1),
+            ], dim=1)
+
+        init_buffer_losses = find_executable_batch_size(self.compute_candidates_loss, true_buffer_size)(init_buffer_embeds)
 
         # Populate the buffer
         for i in range(true_buffer_size):
@@ -341,15 +357,12 @@ class GCG:
     def compute_token_gradient(
         self,
         optim_ids: Tensor,
-        target_ids: Tensor,
     ) -> Tensor:
         """Computes the gradient of the GCG loss w.r.t the one-hot token matrix.
 
         Args:
         optim_ids : Tensor, shape = (1, n_optim_ids)
             the sequence of token ids that are being optimized 
-        target_ids : Tensor, shape = (1, n_target_ids)
-            the token ids of the target sequence
         """
         model = self.model
         embedding_layer = self.embedding_layer
@@ -362,14 +375,19 @@ class GCG:
         # (1, num_optim_tokens, vocab_size) @ (vocab_size, embed_dim) -> (1, num_optim_tokens, embed_dim)
         optim_embeds = optim_ids_onehot @ embedding_layer.weight
 
-        input_embeds = torch.cat([optim_embeds, self.after_embeds, self.target_embeds], dim=1)
-        output = model(inputs_embeds=input_embeds, past_key_values=self.prefix_cache)
+        if self.prefix_cache:
+            input_embeds = torch.cat([optim_embeds, self.after_embeds, self.target_embeds], dim=1)
+            output = model(inputs_embeds=input_embeds, past_key_values=self.prefix_cache)
+        else:
+            input_embeds = torch.cat([self.before_embeds, optim_embeds, self.after_embeds, self.target_embeds], dim=1)
+            output = model(inputs_embeds=input_embeds)
+
         logits = output.logits
 
         # Shift logits so token n-1 predicts token n
-        shift = input_embeds.shape[1] - target_ids.shape[1]
+        shift = input_embeds.shape[1] - self.target_ids.shape[1]
         shift_logits = logits[..., shift-1:-1, :].contiguous() # (1, num_target_ids, vocab_size)
-        shift_labels = target_ids
+        shift_labels = self.target_ids
 
         if self.config.use_mellowmax:
             label_logits = torch.gather(shift_logits, -1, shift_labels.unsqueeze(-1)).squeeze(-1)
@@ -385,7 +403,6 @@ class GCG:
         self,
         search_batch_size: int, 
         input_embeds: Tensor, 
-        target_ids: Tensor,
     ) -> Tensor:
         """Computes the GCG loss on all candidate token id sequences.
 
@@ -394,26 +411,28 @@ class GCG:
                 the number of candidate sequences to evaluate in a given batch
             input_embeds : Tensor, shape = (search_width, seq_len, embd_dim)
                 the embeddings of the `search_width` candidate sequences to evaluate
-            target_ids : Tensor, shape = (1, n_target_ids)
-                the token ids of the target sequence 
         """
         all_loss = []
         prefix_cache_batch = []
-        prefix_cache = self.prefix_cache
+
         for i in range(0, input_embeds.shape[0], search_batch_size):
             with torch.no_grad():
                 input_embeds_batch = input_embeds[i:i+search_batch_size]
                 current_batch_size = input_embeds_batch.shape[0]
 
-                if not prefix_cache_batch or current_batch_size != search_batch_size:
-                    prefix_cache_batch = [[x.expand(current_batch_size, -1, -1, -1) for x in prefix_cache[i]] for i in range(len(prefix_cache))]
+                if self.prefix_cache:
+                    if not prefix_cache_batch or current_batch_size != search_batch_size:
+                        prefix_cache_batch = [[x.expand(current_batch_size, -1, -1, -1) for x in self.prefix_cache[i]] for i in range(len(self.prefix_cache))]
 
-                outputs = self.model(inputs_embeds=input_embeds_batch, past_key_values=prefix_cache_batch)
+                    outputs = self.model(inputs_embeds=input_embeds_batch, past_key_values=prefix_cache_batch)
+                else:
+                    outputs = self.model(inputs_embeds=input_embeds_batch)
+
                 logits = outputs.logits
 
-                tmp = input_embeds.shape[1] - target_ids.shape[1]
+                tmp = input_embeds.shape[1] - self.target_ids.shape[1]
                 shift_logits = logits[..., tmp-1:-1, :].contiguous()
-                shift_labels = target_ids.repeat(current_batch_size, 1)
+                shift_labels = self.target_ids.repeat(current_batch_size, 1)
                 
                 if self.config.use_mellowmax:
                     label_logits = torch.gather(shift_logits, -1, shift_labels.unsqueeze(-1)).squeeze(-1)
