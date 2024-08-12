@@ -49,7 +49,7 @@ config = GCGConfig(
     search_width=64,
     topk=64,
     seed=42,
-    verbose=True
+    verbosity="WARNING"
 )
 
 result = nanogcg.run(model, tokenizer, message, target, config)
@@ -83,7 +83,7 @@ The parameters that can be configured and their defaults are:
 
 - `seed: int = None` - the random seed to use
 
-- `verbose: bool = False` - if True, prints the entire attack buffer after each iteration
+- `verbosity: str = "INFO"` - the reported logging error level (e.g. "ERROR", "WARNING", "INFO")
 
 Note that the default nanoGCG configuration will run GCG exactly as described in the [original paper](https://arxiv.org/pdf/2307.15043).
 
