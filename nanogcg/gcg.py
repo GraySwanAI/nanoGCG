@@ -1,5 +1,6 @@
 import copy
 import gc
+import logging
 
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -11,6 +12,13 @@ from torch import Tensor
 from transformers import set_seed
 
 from nanogcg.utils import INIT_CHARS, find_executable_batch_size, get_nonascii_toks, mellowmax
+
+logging.basicConfig(
+    format="%(asctime)s [%(filename)s:%(lineno)d] %(message)s",
+    datefmt="%Y-%m-%d:%H:%M:%S",
+    level=logging.INFO,
+)
+logger = logging.getLogger("nanogcg")
 
 @dataclass
 class GCGConfig:
@@ -27,7 +35,7 @@ class GCGConfig:
     filter_ids: bool = True
     add_space_before_target: bool = False
     seed: int = None
-    verbose: bool = False
+    verbosity: str = "INFO"
 
 @dataclass
 class GCGResult:
@@ -62,14 +70,14 @@ class AttackBuffer:
     def get_highest_loss(self) -> float:
         return self.buffer[-1][0]
     
-    def print_buffer(self, tokenizer):
-        print("buffer:")
+    def log_buffer(self, tokenizer):
+        message = "buffer:"
         for loss, ids in self.buffer:
             optim_str = tokenizer.batch_decode(ids)[0]
             optim_str = optim_str.replace("\\", "\\\\")
             optim_str = optim_str.replace("\n", "\\n")
-            print(f"loss: {loss}" + f" | string: {optim_str}")
-        print()
+            message += f"\nloss: {loss}" + f" | string: {optim_str}"
+        logger.info(message)
 
 def sample_ids_from_grad(
     ids: Tensor, 
@@ -164,10 +172,10 @@ class GCG:
         self.not_allowed_ids = None if config.allow_non_ascii else get_nonascii_toks(tokenizer, device=model.device)
 
         if model.dtype in (torch.float32, torch.float64):
-            print(f"WARNING: Model is in {model.dtype}. Use a lower precision data type, if possible, for much faster optimization.")
+            logger.warning(f"Model is in {model.dtype}. Use a lower precision data type, if possible, for much faster optimization.")
 
         if model.device == torch.device("cpu"):
-            print("WARNING: model is on the CPU. Use a hardware accelerator for faster optimization.")
+            logger.warning("Model is on the CPU. Use a hardware accelerator for faster optimization.")
     
     def run(
         self,
@@ -224,7 +232,7 @@ class GCG:
         losses = []
         optim_strings = []
         
-        for i in tqdm(range(config.num_steps)):
+        for _ in tqdm(range(config.num_steps)):
             # Compute the token gradient
             optim_ids_onehot_grad = self.compute_token_gradient(optim_ids, target_ids) 
 
@@ -269,8 +277,7 @@ class GCG:
             optim_str = tokenizer.batch_decode(optim_ids)[0]
             optim_strings.append(optim_str)
 
-            if config.verbose:
-                buffer.print_buffer(tokenizer)                
+            buffer.log_buffer(tokenizer)                
 
         min_loss_index = losses.index(min(losses)) 
 
@@ -288,8 +295,7 @@ class GCG:
         tokenizer = self.tokenizer
         config = self.config
 
-        if config.verbose:
-            print(f"Initializing attack buffer of size {config.buffer_size}...")
+        logger.info(f"Initializing attack buffer of size {config.buffer_size}...")
 
         # Create the attack buffer and initialize the buffer ids
         buffer = AttackBuffer(config.buffer_size)
@@ -305,11 +311,11 @@ class GCG:
                 
         else: # assume list
             if (len(config.optim_str_init) != config.buffer_size):
-                print(f"WARNING: Using {len(config.optim_str_init)} initializations but buffer size is set to {config.buffer_size}")
+                logger.warning(f"Using {len(config.optim_str_init)} initializations but buffer size is set to {config.buffer_size}")
             try:
                 init_buffer_ids = tokenizer(config.optim_str_init, add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device)
             except ValueError:
-                print("Unable to create buffer. Ensure that all initializations tokenize to the same length.")
+                logger.error("Unable to create buffer. Ensure that all initializations tokenize to the same length.")
 
         true_buffer_size = max(1, config.buffer_size) 
 
@@ -328,8 +334,7 @@ class GCG:
         for i in range(true_buffer_size):
             buffer.add(init_buffer_losses[i], init_buffer_ids[[i]])
 
-        if config.verbose:
-            print("Initialized attack buffer.")
+        logger.info("Initialized attack buffer.")
         
         return buffer
     
@@ -447,6 +452,8 @@ def run(
     """
     if config is None:
         config = GCGConfig()
+    
+    logger.setLevel(getattr(logging, config.verbosity))
     
     gcg = GCG(model, tokenizer, config)
     result = gcg.run(messages, target)
