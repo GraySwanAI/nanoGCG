@@ -13,12 +13,16 @@ from transformers import set_seed
 
 from nanogcg.utils import INIT_CHARS, find_executable_batch_size, get_nonascii_toks, mellowmax
 
-logging.basicConfig(
-    format="%(asctime)s [%(filename)s:%(lineno)d] %(message)s",
-    datefmt="%Y-%m-%d:%H:%M:%S",
-    level=logging.INFO,
-)
 logger = logging.getLogger("nanogcg")
+if not logger.hasHandlers():
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s [%(filename)s:%(lineno)d] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 @dataclass
 class GCGConfig:
