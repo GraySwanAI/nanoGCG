@@ -227,10 +227,9 @@ class GCG:
             with torch.no_grad():
                 output = model(inputs_embeds=before_embeds, use_cache=True)
                 self.prefix_cache = output.past_key_values
-        else:
-            self.before_embeds = before_embeds
         
         self.target_ids = target_ids
+        self.before_embeds = before_embeds
         self.after_embeds = after_embeds
         self.target_embeds = target_embeds
 
