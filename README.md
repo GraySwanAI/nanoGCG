@@ -97,7 +97,7 @@ This is accomplished by supporting `messages` that are in the `List[dict]` forma
 import nanogcg
 import torch
 
-from transformers import AutoModelForCausaulLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
 model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16).to("cuda")
