@@ -214,9 +214,9 @@ class GCG:
         target = " " + target if config.add_space_before_target else target
 
         # Tokenize everything that doesn't get optimized
-        before_ids = tokenizer([before_str], padding=False, return_tensors="pt")["input_ids"].to(model.device)
-        after_ids = tokenizer([after_str], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device)
-        target_ids = tokenizer([target], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device)
+        before_ids = tokenizer([before_str], padding=False, return_tensors="pt")["input_ids"].to(model.device).to(torch.int64)
+        after_ids = tokenizer([after_str], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device).to(torch.int64)
+        target_ids = tokenizer([target], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device).to(torch.int64)
 
         # Embed everything that doesn't get optimized
         embedding_layer = self.embedding_layer
