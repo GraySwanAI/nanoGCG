@@ -156,7 +156,7 @@ def filter_ids(ids: Tensor, tokenizer: transformers.PreTrainedTokenizer):
     if not filtered_ids:
         # This occurs in some cases, e.g. using the Llama-3 tokenizer with a bad initialization
         raise RuntimeError(
-            "No token sequences are the same after decoding and re-encoding"
+            "No token sequences are the same after decoding and re-encoding. "
             "Consider setting `filter_ids=False` or trying a different `optim_str_init`"
         )
     
