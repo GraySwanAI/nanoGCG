@@ -1,6 +1,10 @@
+![](./assets/nanogcg.png)
+
 # nanoGCG
 
-![](./assets/nanogcg.png)
+[![Pypi](https://img.shields.io/pypi/v/nanogcg?color=blue)](https://pypi.org/project/nanogcg/)
+![Pypi Total Downloads](https://img.shields.io/pepy/dt/nanogcg?color=blue) ![PyPI -
+License](https://img.shields.io/pypi/l/transformer_lens?color=blue)
 
 nanoGCG is a lightweight but full-featured implementation of the GCG (Greedy Coordinate Gradient) algorithm. This implementation can be used to optimize adversarial strings on causal Hugging Face models.
 
@@ -22,13 +26,13 @@ pip install -e .
 
 ## Overview
 
-The GCG algorithm was introduced in the paper [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. This implementation implements the original algorithm and supports several modifications that have the potential to improve performance, including multi-position token swapping [2], a historical attack buffer [2][3], and the mellowmax loss function [4][5].
+The GCG algorithm was introduced in [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. This implementation implements the original algorithm and supports several modifications that can improve performance, including multi-position token swapping [2], a historical attack buffer [2][3], and the mellowmax loss function [4][5].
 
 ## Usage
 
 The simplest way to use nanoGCG is by following the format in the image at the top of this README.
 
-nanoGCG also provides a configuration class, which can be used to achieve greater control. This can be used as follows:
+nanoGCG provides a config class, which can be used to achieve greater control. This can be used as follows:
 
 ```python
 import nanogcg
@@ -89,9 +93,11 @@ The parameters that can be configured and their defaults are:
 
 Note that the default nanoGCG configuration will run GCG exactly as described in the [original paper](https://arxiv.org/pdf/2307.15043).
 
+The `run` method returns a `GCGResult` object, which has a `best_string` attribute -- this is the optimized string that can be inserted into prompts. Losses and strings from each step of the optimization are returned in the result, via the `losses` and `strings` attributes, along with a `best_loss` attribute that corresponds to `best_string`.
+
 nanoGCG also supports variable placement of the optimized string within the user prompt, rather than requiring the string to appear immediately after the user prompt. In addition, nanoGCG supports optimizing in the context of an entire conversation history, so long as it fits in the model's context window, rather than a single user prompt.
 
-This is accomplished by supporting `messages` that are in the `List[dict]` format and inserting the format specifier `{optim_str}` within `messages` to indicate where the optimized string will appear:
+This is accomplished by supporting `messages` that are in the `List[dict]` format and inserting the format specifier `{optim_str}` within `messages` to indicate where the optimized string will appear. For example:
 
 ```python
 import nanogcg
@@ -132,11 +138,11 @@ If you use this codebase or find the GCG algorithm valuable, feel free to cite t
 
 ```
 @misc{zou2023universal,
-      title={Universal and Transferable Adversarial Attacks on Aligned Language Models}, 
-      author={Andy Zou and Zifan Wang and Nicholas Carlini and Milad Nasr and J. Zico Kolter and Matt Fredrikson},
-      year={2023},
-      eprint={2307.15043},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
+    title={Universal and Transferable Adversarial Attacks on Aligned Language Models},
+    author={Andy Zou and Zifan Wang and Nicholas Carlini and Milad Nasr and J. Zico Kolter and Matt Fredrikson},
+    year={2023},
+    eprint={2307.15043},
+    archivePrefix={arXiv},
+    primaryClass={cs.CL}
 }
 ```
