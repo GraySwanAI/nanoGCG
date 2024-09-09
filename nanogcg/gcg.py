@@ -41,6 +41,7 @@ class GCGConfig:
     add_space_before_target: bool = False
     seed: int = None
     verbosity: str = "INFO"
+    early_stop: bool = False
 
 @dataclass
 class GCGResult:
@@ -177,6 +178,8 @@ class GCG:
         self.not_allowed_ids = None if config.allow_non_ascii else get_nonascii_toks(tokenizer, device=model.device)
         self.prefix_cache = None
 
+        self.stop_flag = False
+
         if model.dtype in (torch.float32, torch.float64):
             logger.warning(f"Model is in {model.dtype}. Use a lower precision data type, if possible, for much faster optimization.")
 
@@ -292,6 +295,10 @@ class GCG:
 
             buffer.log_buffer(tokenizer)                
 
+            if self.stop_flag:
+                logger.info("Early stopping due to finding a perfect match.") 
+                break
+              
         min_loss_index = losses.index(min(losses)) 
 
         result = GCGResult(
@@ -317,8 +324,8 @@ class GCG:
             init_optim_ids = tokenizer(config.optim_str_init, add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device)
             if config.buffer_size > 1:
                 init_buffer_ids = tokenizer(INIT_CHARS, add_special_tokens=False, return_tensors="pt")["input_ids"].squeeze().to(model.device, dtype=torch.float32)
-                init_buffer_ids = [init_buffer_ids[torch.multinomial(init_buffer_ids, init_optim_ids.shape[1], replacement=True)].unsqueeze(0).long() for _ in range(config.buffer_size - 1)]
-                init_buffer_ids = torch.cat([init_optim_ids] + init_buffer_ids, dim=0)
+                init_indices = torch.randint(0, init_buffer_ids.shape[0], (config.buffer_size - 1, init_optim_ids.shape[1]))
+                init_buffer_ids = torch.cat([init_buffer_ids[indices].unsqueeze(0).long() for indices in init_indices] + [init_optim_ids], dim=0)
             else:
                 init_buffer_ids = init_optim_ids
                 
@@ -445,6 +452,10 @@ class GCG:
 
                 loss = loss.view(current_batch_size, -1).mean(dim=-1)
                 all_loss.append(loss)
+
+                if self.config.early_stop:
+                    if torch.any(torch.all(torch.argmax(shift_logits, dim=-1) == shift_labels, dim=-1)).item():
+                        self.stop_flag = True
 
                 del outputs
                 gc.collect()
