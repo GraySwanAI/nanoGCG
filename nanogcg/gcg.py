@@ -35,13 +35,13 @@ class GCGConfig:
     buffer_size: int = 0
     use_mellowmax: bool = False
     mellowmax_alpha: float = 1.0
+    early_stop: bool = False
     use_prefix_cache: bool = True
     allow_non_ascii: bool = False
     filter_ids: bool = True
     add_space_before_target: bool = False
     seed: int = None
     verbosity: str = "INFO"
-    early_stop: bool = False
 
 @dataclass
 class GCGResult:
@@ -323,9 +323,9 @@ class GCG:
         if isinstance(config.optim_str_init, str):
             init_optim_ids = tokenizer(config.optim_str_init, add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device)
             if config.buffer_size > 1:
-                init_buffer_ids = tokenizer(INIT_CHARS, add_special_tokens=False, return_tensors="pt")["input_ids"].squeeze().to(model.device, dtype=torch.float32)
+                init_buffer_ids = tokenizer(INIT_CHARS, add_special_tokens=False, return_tensors="pt")["input_ids"].squeeze().to(model.device)
                 init_indices = torch.randint(0, init_buffer_ids.shape[0], (config.buffer_size - 1, init_optim_ids.shape[1]))
-                init_buffer_ids = torch.cat([init_buffer_ids[indices].unsqueeze(0).long() for indices in init_indices] + [init_optim_ids], dim=0)
+                init_buffer_ids = torch.cat([init_optim_ids, init_buffer_ids[init_indices]], dim=0)
             else:
                 init_buffer_ids = init_optim_ids
                 
