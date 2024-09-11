@@ -26,7 +26,7 @@ pip install -e .
 
 ## Overview
 
-The GCG algorithm was introduced in [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. This implementation implements the original algorithm and supports several modifications that can improve performance, including multi-position token swapping [2], a historical attack buffer [2][3], and the mellowmax loss function [4][5].
+The GCG algorithm was introduced in [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. This implementation implements the original algorithm and supports several modifications that can improve performance, including multi-position token swapping [2], early stopping strategy [2], a historical attack buffer [2][3], and the mellowmax loss function [4][5].
 
 ## Usage
 
@@ -78,6 +78,8 @@ The parameters that can be configured and their defaults are:
 - `use_mellowmax: bool = False` - if True, uses the mellowmax loss function rather than the standard GCG loss
 
 - `mellowmax_alpha: float = 1.0` - the value of the alpha parameter used in the mellowmax loss function
+
+- `early_stop: bool = False` - if True, uses the argmax of the logits to determine if they correspond exactly to the target string for early stopping.
 
 - `use_prefix_cache: bool = True ` - if True, stores the KV cache for all token positions before the optimized tokens
 
