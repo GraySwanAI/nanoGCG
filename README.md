@@ -93,7 +93,7 @@ The parameters that can be configured and their defaults are:
 
 - `verbosity: str = "INFO"` - the reported logging error level (e.g. "ERROR", "WARNING", "INFO")
 
-Note that the default nanoGCG configuration will run GCG exactly as described in the [original paper](https://arxiv.org/pdf/2307.15043).
+Note that the default nanoGCG configuration will run the GCG algorithm as described in the [original paper](https://arxiv.org/pdf/2307.15043) without algorithmic changes like multi-position token swapping and mellowmax.
 
 The `run` method returns a `GCGResult` object, which has a `best_string` attribute -- this is the optimized string that can be inserted into prompts. Losses and strings from each step of the optimization are returned in the result, via the `losses` and `strings` attributes, along with a `best_loss` attribute that corresponds to `best_string`.
 
