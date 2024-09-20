@@ -62,9 +62,9 @@ class AttackBuffer:
 
         if len(self.buffer) < self.size:
             self.buffer.append((loss, optim_ids))
-            return
+        else:
+            self.buffer[-1] = (loss, optim_ids)
 
-        self.buffer[-1] = (loss, optim_ids)
         self.buffer.sort(key=lambda x: x[0])
 
     def get_best_ids(self) -> Tensor:
@@ -363,6 +363,8 @@ class GCG:
         # Populate the buffer
         for i in range(true_buffer_size):
             buffer.add(init_buffer_losses[i], init_buffer_ids[[i]])
+        
+        buffer.log_buffer(tokenizer)
 
         logger.info("Initialized attack buffer.")
         
