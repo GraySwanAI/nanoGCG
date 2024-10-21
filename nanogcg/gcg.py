@@ -104,9 +104,9 @@ def sample_ids_from_grad(
             the number of candidate sequences to return
         topk : int
             the topk to be used when sampling from the gradient
-        n_replace: int
+        n_replace : int
             the number of token positions to update per sequence
-        not_allowed_ids: Tensor, shape = (n_ids)
+        not_allowed_ids : Tensor, shape = (n_ids)
             the token ids that should not be used in optimization
     
     Returns:
@@ -221,9 +221,9 @@ class GCG:
         target = " " + target if config.add_space_before_target else target
 
         # Tokenize everything that doesn't get optimized
-        before_ids = tokenizer([before_str], padding=False, return_tensors="pt")["input_ids"].to(model.device).to(torch.int64)
-        after_ids = tokenizer([after_str], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device).to(torch.int64)
-        target_ids = tokenizer([target], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device).to(torch.int64)
+        before_ids = tokenizer([before_str], padding=False, return_tensors="pt")["input_ids"].to(model.device, torch.int64)
+        after_ids = tokenizer([after_str], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device, torch.int64)
+        target_ids = tokenizer([target], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device, torch.int64)
 
         # Embed everything that doesn't get optimized
         embedding_layer = self.embedding_layer
@@ -377,15 +377,15 @@ class GCG:
         """Computes the gradient of the GCG loss w.r.t the one-hot token matrix.
 
         Args:
-        optim_ids : Tensor, shape = (1, n_optim_ids)
-            the sequence of token ids that are being optimized 
+            optim_ids : Tensor, shape = (1, n_optim_ids)
+                the sequence of token ids that are being optimized 
         """
         model = self.model
         embedding_layer = self.embedding_layer
 
         # Create the one-hot encoding matrix of our optimized token ids
         optim_ids_onehot = torch.nn.functional.one_hot(optim_ids, num_classes=embedding_layer.num_embeddings)
-        optim_ids_onehot = optim_ids_onehot.to(dtype=model.dtype, device=model.device)
+        optim_ids_onehot = optim_ids_onehot.to(model.device, model.dtype)
         optim_ids_onehot.requires_grad_()
 
         # (1, num_optim_tokens, vocab_size) @ (vocab_size, embed_dim) -> (1, num_optim_tokens, embed_dim)

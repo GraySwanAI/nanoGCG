@@ -26,7 +26,7 @@ pip install -e .
 
 ## Overview
 
-The GCG algorithm was introduced in [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. This implementation implements the original algorithm and supports several modifications that can improve performance, including multi-position token swapping [2], early stopping strategy [2], a historical attack buffer [2][3], and the mellowmax loss function [4][5].
+The GCG algorithm was introduced in [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. This implementation implements the original algorithm and supports several modifications that can improve performance, including multi-position token swapping [2], a historical attack buffer [2][3], and the mellowmax loss function [4][5].
 
 ## Usage
 
@@ -83,7 +83,7 @@ The parameters that can be configured and their defaults are:
 
 - `use_prefix_cache: bool = True ` - if True, stores the KV cache for all token positions before the optimized tokens
 
-- `allow_non_ascii : bool = False` - if True, allows for non-ascii tokens to be used
+- `allow_non_ascii : bool = False` - if True, allows for non-ascii tokens in the optimized sequence
 
 - `filter_ids: bool = True` - if True, only retains candidate sequences that are the same after tokenization and retokenization
 
