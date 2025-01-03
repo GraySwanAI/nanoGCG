@@ -5,3 +5,6 @@ results/
 
 *.egg-info
 .DS_Store
+
+env
+venv
