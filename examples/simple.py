@@ -3,11 +3,10 @@ Simple script that runs GCG with the default settings
 """
 
 import argparse
-from math import nan
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import nanogcg
+from nanogcg.gcg import GCGConfig, run
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--dtype", type=str, default="float16")
+    parser.add_argument("--probe-sampling", type=bool, default=False)
     args = parser.parse_args()
     return args
 
@@ -37,9 +37,29 @@ def main():
     ).to(args.device)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
 
+    draft_model = None
+    draft_tokenizer = None
+    if args.probe_sampling:
+        draft_model = AutoModelForCausalLM.from_pretrained(
+            "openai-community/gpt2", torch_dtype=getattr(torch, args.dtype)
+        ).to(args.device)
+        draft_tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
+
     messages = [{"role": "user", "content": args.prompt}]
 
-    result = nanogcg.run(model, tokenizer, messages, args.target)
+    config = GCGConfig(
+        verbosity="DEBUG",
+    )
+
+    result = run(
+        model,
+        tokenizer,
+        messages,
+        args.target,
+        config,
+        draft_model=draft_model,
+        draft_tokenizer=draft_tokenizer,
+    )
 
     messages[-1]["content"] = messages[-1]["content"] + " " + result.best_string
 
