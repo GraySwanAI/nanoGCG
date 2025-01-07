@@ -393,7 +393,7 @@ class GCG:
 
         if self.prefix_cache:
             input_embeds = torch.cat([optim_embeds, self.after_embeds, self.target_embeds], dim=1)
-            output = model(inputs_embeds=input_embeds, past_key_values=self.prefix_cache)
+            output = model(inputs_embeds=input_embeds, past_key_values=self.prefix_cache, use_cache=True)
         else:
             input_embeds = torch.cat([self.before_embeds, optim_embeds, self.after_embeds, self.target_embeds], dim=1)
             output = model(inputs_embeds=input_embeds)
@@ -440,7 +440,7 @@ class GCG:
                     if not prefix_cache_batch or current_batch_size != search_batch_size:
                         prefix_cache_batch = [[x.expand(current_batch_size, -1, -1, -1) for x in self.prefix_cache[i]] for i in range(len(self.prefix_cache))]
 
-                    outputs = self.model(inputs_embeds=input_embeds_batch, past_key_values=prefix_cache_batch)
+                    outputs = self.model(inputs_embeds=input_embeds_batch, past_key_values=prefix_cache_batch, use_cache=True)
                 else:
                     outputs = self.model(inputs_embeds=input_embeds_batch)
 

@@ -83,7 +83,7 @@ The parameters that can be configured and their defaults are:
 
 - `use_prefix_cache: bool = True ` - if True, stores the KV cache for all token positions before the optimized tokens
 
-- `allow_non_ascii : bool = False` - if True, allows for non-ascii tokens in the optimized sequence
+- `allow_non_ascii: bool = False` - if True, allows for non-ascii tokens in the optimized sequence
 
 - `filter_ids: bool = True` - if True, only retains candidate sequences that are the same after tokenization and retokenization
 
