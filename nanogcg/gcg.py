@@ -399,12 +399,19 @@ class GCG:
                     current_loss = loss.min().item()
                     optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
 
+                    logger.debug(
+                        f"Current loss: {current_loss}, buffer highest: {buffer.get_highest_loss()}"
+                    )
+
                     # Update the buffer based on the loss
-                    if buffer.size == 0 or current_loss < buffer.get_highest_loss():
+                    if current_loss < buffer.get_highest_loss():
                         losses.append(current_loss)
                         buffer.add(current_loss, optim_ids)
                         break
                     elif trial_count >= retry_limit:
+                        if buffer.size == 0:
+                            # TODO: should pick the best one from the retries
+                            buffer.add(current_loss, optim_ids)
                         losses.append(current_loss)
                         break
                     else:
