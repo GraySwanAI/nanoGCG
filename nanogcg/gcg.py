@@ -53,6 +53,7 @@ class GCGConfig:
     verbosity: str = "INFO"
     probe_sampling_r: Optional[int] = None
     probe_sampling_factor: int = 16
+    retry_limit: int = 0
 
 
 @dataclass
@@ -383,22 +384,32 @@ class GCG:
                         dim=1,
                     )
 
-                if self.draft_model is None:
-                    loss = find_executable_batch_size(
-                        self._compute_candidates_loss_original, batch_size
-                    )(input_embeds)
-                else:
-                    loss = find_executable_batch_size(
-                        self._compute_candidates_loss_probe_sampling, batch_size
-                    )(input_embeds, sampled_ids)
+                retry_limit = self.config.retry_limit
+                trial_count = 0
+                while True:
+                    if self.draft_model is None:
+                        loss = find_executable_batch_size(
+                            self._compute_candidates_loss_original, batch_size
+                        )(input_embeds)
+                    else:
+                        loss = find_executable_batch_size(
+                            self._compute_candidates_loss_probe_sampling, batch_size
+                        )(input_embeds, sampled_ids)
 
-                current_loss = loss.min().item()
-                optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
+                    current_loss = loss.min().item()
+                    optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
 
-                # Update the buffer based on the loss
-                losses.append(current_loss)
-                if buffer.size == 0 or current_loss < buffer.get_highest_loss():
-                    buffer.add(current_loss, optim_ids)
+                    # Update the buffer based on the loss
+                    if buffer.size == 0 or current_loss < buffer.get_highest_loss():
+                        losses.append(current_loss)
+                        buffer.add(current_loss, optim_ids)
+                        break
+                    elif trial_count >= retry_limit:
+                        losses.append(current_loss)
+                        break
+                    else:
+                        trial_count += 1
+                        logger.info(f"Loss not optimized. Retrying #{trial_count}.")
 
             optim_ids = buffer.get_best_ids()
             optim_str = tokenizer.batch_decode(optim_ids)[0]
@@ -573,25 +584,6 @@ class GCG:
         )[0]
 
         return optim_ids_onehot_grad
-
-    def compute_candidates_loss(
-        self,
-        search_batch_size: int,
-        input_embeds: Tensor,
-        sampled_ids: Tensor,
-    ) -> Tensor:
-        """Computes the GCG loss on all candidate token id sequences.
-
-        Args:
-            search_batch_size : int
-                the number of candidate sequences to evaluate in a given batch
-            input_embeds : Tensor, shape = (search_width, seq_len, embd_dim)
-                the embeddings of the `search_width` candidate sequences to evaluate
-        """
-        if self.draft_model is None:
-            return self._compute_candidates_loss_original(
-                search_batch_size, input_embeds
-            )
 
     def _compute_candidates_loss_probe_sampling(
         self,
@@ -786,10 +778,7 @@ class GCG:
         logger.debug(f"Best probe loss: {best_probe_loss}")
         logger.debug(f"Best filtered loss: {best_filtered_loss}")
 
-        if best_probe_loss < best_filtered_loss:
-            return probe_losses
-        else:
-            return filtered_losses
+        return probe_losses if best_probe_loss < best_filtered_loss else filtered_losses
 
     def _compute_candidates_loss_original(
         self,
