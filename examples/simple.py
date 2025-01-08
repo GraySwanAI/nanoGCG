@@ -44,6 +44,7 @@ def main():
             "openai-community/gpt2", torch_dtype=getattr(torch, args.dtype)
         ).to(args.device)
         draft_tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
+        print(draft_tokenizer)
 
     messages = [{"role": "user", "content": args.prompt}]
 
@@ -62,6 +63,7 @@ def main():
     )
 
     messages[-1]["content"] = messages[-1]["content"] + " " + result.best_string
+    print(result.best_string)
 
     input = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, return_tensors="pt"

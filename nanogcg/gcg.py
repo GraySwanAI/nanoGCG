@@ -1,6 +1,8 @@
 import copy
 import gc
 import logging
+import queue
+import threading
 
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -30,9 +32,6 @@ if not logger.hasHandlers():
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-# FIXME
-PROBE_SIZE = 32
-
 
 @dataclass
 class GCGConfig:
@@ -52,6 +51,8 @@ class GCGConfig:
     add_space_before_target: bool = False
     seed: int = None
     verbosity: str = "INFO"
+    probe_sampling_r: Optional[int] = None
+    probe_sampling_factor: int = 16
 
 
 @dataclass
@@ -213,9 +214,11 @@ class GCG:
             logger.debug("Probe sampling enabled.")
             self.draft_embedding_layer = self.draft_model.get_input_embeddings()
             if self.draft_tokenizer.pad_token is None:
-                self.draft_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+                # TODO document why
+                self.draft_tokenizer.pad_token = tokenizer.eos_token
+                # self.draft_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
             # TODO not sure if needed
-            self.draft_model.eval()
+            # self.draft_model.eval()
 
         if model.dtype in (torch.float32, torch.float64):
             logger.warning(
@@ -283,12 +286,6 @@ class GCG:
         before_embeds, after_embeds, target_embeds = [
             embedding_layer(ids) for ids in (before_ids, after_ids, target_ids)
         ]
-        logger.debug(
-            f"ids: {before_ids.size()}, {target_ids.size()}, {after_ids.size()}"
-        )
-        logger.debug(
-            f"embeds: {before_embeds.size()}, {target_embeds.size()}, {after_embeds.size()}"
-        )
 
         # Compute the KV Cache for tokens that appear before the optimized tokens
         if config.use_prefix_cache:
@@ -303,23 +300,33 @@ class GCG:
 
         if self.draft_model and self.draft_tokenizer and self.draft_embedding_layer:
             # Tokenize everything that doesn't get optimized for the draft model, if probe sampling is enabled
-            self.draft_before_ids = self.draft_tokenizer(
+            draft_before_ids = self.draft_tokenizer(
                 [before_str], padding=False, return_tensors="pt"
             )["input_ids"].to(model.device, torch.int64)
-            self.draft_after_ids = self.draft_tokenizer(
+            draft_after_ids = self.draft_tokenizer(
                 [after_str], add_special_tokens=False, return_tensors="pt"
             )["input_ids"].to(model.device, torch.int64)
             self.draft_target_ids = self.draft_tokenizer(
                 [target], add_special_tokens=False, return_tensors="pt"
             )["input_ids"].to(model.device, torch.int64)
 
+            (
+                self.draft_before_embeds,
+                self.draft_after_embeds,
+                self.draft_target_embeds,
+            ) = [
+                self.draft_embedding_layer(ids)
+                for ids in (
+                    draft_before_ids,
+                    draft_after_ids,
+                    self.draft_target_ids,
+                )
+            ]
+
             if config.use_prefix_cache:
                 with torch.no_grad():
-                    draft_before_embeds = self.draft_embedding_layer(
-                        self.draft_before_ids
-                    )
                     output = self.draft_model(
-                        inputs_embeds=draft_before_embeds, use_cache=True
+                        inputs_embeds=self.draft_before_embeds, use_cache=True
                     )
                     self.draft_prefix_cache = output.past_key_values
 
@@ -327,16 +334,13 @@ class GCG:
         buffer = self.init_buffer()
         optim_ids = buffer.get_best_ids()
 
-        logger.debug(f"optim_ids: {optim_ids}")
-
         losses = []
         optim_strings = []
 
         for _ in tqdm(range(config.num_steps)):
             # Compute the token gradient
-            optim_ids_onehot_grad = self.compute_token_gradient(optim_ids)
             # torch.Size([1, 20, 50257]) for gpt2, the grad if replacing token i with j of the V.
-            logger.debug(f"optim_ids_onehot_grad: {optim_ids_onehot_grad.size()}")
+            optim_ids_onehot_grad = self.compute_token_gradient(optim_ids)
 
             with torch.no_grad():
 
@@ -350,8 +354,6 @@ class GCG:
                     not_allowed_ids=self.not_allowed_ids,
                 )
 
-                logger.debug(f"sampled_ids: {sampled_ids.size()}, {sampled_ids}")
-
                 if config.filter_ids:
                     sampled_ids = filter_ids(sampled_ids, tokenizer)
 
@@ -361,7 +363,6 @@ class GCG:
                 batch_size = (
                     new_search_width if config.batch_size is None else config.batch_size
                 )
-
                 if self.prefix_cache:
                     input_embeds = torch.cat(
                         [
@@ -381,9 +382,15 @@ class GCG:
                         ],
                         dim=1,
                     )
-                loss = find_executable_batch_size(
-                    self.compute_candidates_loss, batch_size
-                )(input_embeds, sampled_ids)
+
+                if self.draft_model is None:
+                    loss = find_executable_batch_size(
+                        self._compute_candidates_loss_original, batch_size
+                    )(input_embeds)
+                else:
+                    loss = find_executable_batch_size(
+                        self._compute_candidates_loss_probe_sampling, batch_size
+                    )(input_embeds, sampled_ids)
 
                 current_loss = loss.min().item()
                 optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
@@ -585,36 +592,54 @@ class GCG:
             return self._compute_candidates_loss_original(
                 search_batch_size, input_embeds
             )
-        logger.debug(f"Input embeds: {input_embeds.size()}")
-        logger.debug(f"Search batch size {search_batch_size}")
-        logger.debug(f"Probe sampling")
+
+    def _compute_candidates_loss_probe_sampling(
+        self,
+        search_batch_size: int,
+        input_embeds: Tensor,
+        sampled_ids: Tensor,
+    ) -> Tensor:
+        """Computes the GCG loss on all candidate token id sequences.
+
+        Args:
+            search_batch_size : int
+                the number of candidate sequences to evaluate in a given batch
+            input_embeds : Tensor, shape = (search_width, seq_len, embd_dim)
+                the embeddings of the `search_width` candidate sequences to evaluate
+        """
 
         B = input_embeds.shape[0]
-
-        # Step 1
-        # FIXME: Q - sample_ids vs input_embeds
-        probe_idxs = torch.randperm(B)[:PROBE_SIZE]
+        probe_size = B // self.config.probe_sampling_factor
+        probe_idxs = torch.randperm(B)[:probe_size].to(input_embeds.device)
         probe_embeds = input_embeds[probe_idxs]
 
-        # Step 2
-        probe_losses = self._compute_candidates_loss_original(
-            search_batch_size, probe_embeds
-        )
-        logger.debug(f"Probe indices: {probe_idxs}")
-        logger.debug(f"Probe losses: {probe_losses.size()}")
+        # Helper 1 - Will be executed by probe thread below
+        def _compute_probe_losses(
+            result_queue: queue.Queue, search_batch_size: int, probe_embeds: Tensor
+        ) -> None:
+            probe_losses = self._compute_candidates_loss_original(
+                search_batch_size, probe_embeds
+            )
+            result_queue.put(("probe", probe_losses))
+            logger.debug("Probe thread done.")
 
-        # Step 3 Compute losses for all candidates with draft model
-        draft_sampled_ids = self._convert_to_draft_tokens(sampled_ids)
-        with torch.no_grad():
+        # Will be executed by draft thread below
+        def _compute_draft_losses(
+            result_queue: queue.Queue,
+            search_batch_size: int,
+            draft_sampled_ids: Tensor,
+        ) -> None:
+            assert (
+                self.draft_model and self.draft_embedding_layer
+            ), "Draft model and embedding layer weren't initialized properly."
+
             draft_losses = []
             draft_prefix_cache_batch = None
             for i in range(0, B, search_batch_size):
                 batch_size = min(search_batch_size, B - i)
-                batch_ids = draft_sampled_ids[i : i + batch_size]
+                draft_sampled_ids_batch = draft_sampled_ids[i : i + batch_size]
 
-                # Use draft model's own embeddings
                 if self.draft_prefix_cache:
-                    # Only recompute expanded cache if needed
                     if not draft_prefix_cache_batch or batch_size != search_batch_size:
                         draft_prefix_cache_batch = [
                             [
@@ -623,72 +648,119 @@ class GCG:
                             ]
                             for i in range(len(self.draft_prefix_cache))
                         ]
-                    draft_input = torch.cat(
+                    logger.debug(
+                        self.draft_embedding_layer(draft_sampled_ids_batch).shape
+                    )
+                    logger.debug(draft_sampled_ids_batch.shape)
+                    logger.debug(self.draft_after_embeds.shape)
+                    logger.debug(self.draft_after_embeds.repeat(batch_size, 1, 1).shape)
+                    logger.debug(self.draft_target_embeds.shape)
+                    logger.debug(
+                        self.draft_target_embeds.repeat(batch_size, 1, 1).shape
+                    )
+                    draft_embeds = torch.cat(
                         [
-                            batch_ids,
-                            self.draft_after_ids.repeat(batch_size, 1),
-                            self.draft_target_ids.repeat(batch_size, 1),
+                            self.draft_embedding_layer(draft_sampled_ids_batch),
+                            self.draft_after_embeds.repeat(batch_size, 1, 1),
+                            self.draft_target_embeds.repeat(batch_size, 1, 1),
                         ],
                         dim=1,
                     )
-                else:
-                    draft_input = torch.cat(
-                        [
-                            self.draft_before_ids.repeat(batch_size, 1),
-                            batch_ids,
-                            self.draft_after_ids.repeat(batch_size, 1),
-                            self.draft_target_ids.repeat(batch_size, 1),
-                        ],
-                        dim=1,
-                    )
-
-                # Get embeddings using draft model's embedding layer
-                draft_embeds = self.draft_embedding_layer(draft_input)
-
-                # Forward pass with draft model
-                if self.draft_prefix_cache:
                     draft_output = self.draft_model(
                         inputs_embeds=draft_embeds,
                         past_key_values=draft_prefix_cache_batch,
                     )
                 else:
+                    draft_embeds = torch.cat(
+                        [
+                            self.draft_before_embeds.repeat(batch_size, 1, 1),
+                            self.draft_embedding_layer(draft_sampled_ids_batch),
+                            self.draft_after_embeds.repeat(batch_size, 1, 1),
+                            self.draft_target_embeds.repeat(batch_size, 1, 1),
+                        ],
+                        dim=1,
+                    )
                     draft_output = self.draft_model(inputs_embeds=draft_embeds)
 
                 draft_logits = draft_output.logits
-                tmp = draft_input.shape[1] - self.draft_target_ids.shape[1]
+                tmp = draft_embeds.shape[1] - self.draft_target_ids.shape[1]
                 shift_logits = draft_logits[..., tmp - 1 : -1, :].contiguous()
                 shift_labels = self.draft_target_ids.repeat(batch_size, 1)
 
-                # TODO: mellowmax
-                loss = (
-                    torch.nn.functional.cross_entropy(
-                        shift_logits.view(-1, shift_logits.size(-1)),
-                        shift_labels.view(-1),
-                        reduction="none",
+                if self.config.use_mellowmax:
+                    label_logits = torch.gather(
+                        shift_logits, -1, shift_labels.unsqueeze(-1)
+                    ).squeeze(-1)
+                    loss = mellowmax(
+                        -label_logits, alpha=self.config.mellowmax_alpha, dim=-1
                     )
-                    .view(batch_size, -1)
-                    .mean(dim=-1)
-                )
+                else:
+                    loss = (
+                        torch.nn.functional.cross_entropy(
+                            shift_logits.view(-1, shift_logits.size(-1)),
+                            shift_labels.view(-1),
+                            reduction="none",
+                        )
+                        .view(batch_size, -1)
+                        .mean(dim=-1)
+                    )
 
                 draft_losses.append(loss)
 
-        draft_losses = torch.cat(draft_losses)
-        logger.debug(f"Draft_losses: {draft_losses.size()}")
+            draft_losses = torch.cat(draft_losses)
+            result_queue.put(("draft", draft_losses))
+            logger.debug("Draft thread done.")
+
+        def _convert_to_draft_tokens(token_ids: Tensor) -> Tensor:
+            decoded_text_list = self.tokenizer.batch_decode(token_ids)
+            assert self.draft_tokenizer, "Draft tokenizer wasn't properly initialized."
+            return self.draft_tokenizer(
+                decoded_text_list,
+                add_special_tokens=False,
+                padding=True,
+                return_tensors="pt",
+            )["input_ids"].to(self.draft_model.device, torch.int64)
+
+        with torch.no_grad():
+            result_queue = queue.Queue()
+            draft_sampled_ids = _convert_to_draft_tokens(sampled_ids)
+
+            draft_thread = threading.Thread(
+                target=_compute_draft_losses,
+                args=(result_queue, search_batch_size, draft_sampled_ids),
+            )
+
+            probe_thread = threading.Thread(
+                target=_compute_probe_losses,
+                args=(result_queue, search_batch_size, probe_embeds),
+            )
+
+            draft_thread.start()
+            probe_thread.start()
+
+            draft_thread.join()
+            probe_thread.join()
+
+        results = {}
+        while not result_queue.empty():
+            key, value = result_queue.get()
+            results[key] = value
+
+        probe_losses = results["probe"]
+        draft_losses = results["draft"]
 
         # Step 4. Calculate agreement score using Spearman correlation
         draft_probe_losses = draft_losses[probe_idxs]
         rank_correlation = spearmanr(
-            probe_losses.cpu().numpy(), draft_probe_losses.cpu().numpy()
+            probe_losses.cpu().type(torch.float32).numpy(),
+            draft_probe_losses.cpu().type(torch.float32).numpy(),
         ).correlation
         # normalized from [-1, 1] to [0, 1]
         alpha = (1 + rank_correlation) / 2
 
-        logger.debug(f"Correlation: {alpha}")
-
         # 5. Filter candidates based on draft model losses
-        # FIXME parameterize ratio
-        filtered_size = int((1 - alpha) * B * 0.125)
-        # filtered_size = int((1 - rank_correlation) * B * self.config.filter_ratio)
+        R = 8 if self.config.probe_sampling_r is None else self.config.probe_sampling_r
+        filtered_size = int((1 - alpha) * B / R)
         filtered_size = max(1, min(filtered_size, B))
 
         _, top_indices = torch.topk(draft_losses, k=filtered_size, largest=False)
@@ -702,6 +774,17 @@ class GCG:
         # 7. Return best loss between probe set and filtered set
         best_probe_loss = probe_losses.min()
         best_filtered_loss = filtered_losses.min()
+
+        logger.debug(f"Correlation: {alpha}")
+        logger.debug(f"Filtered size: {filtered_size}")
+        logger.debug(f"Probe losses: {probe_losses}")
+        logger.debug(f"Draft losses: {draft_losses.shape}")
+        logger.debug(f"Draft probe losses: {draft_probe_losses}")
+        logger.debug(f"Probe indices: {probe_idxs}")
+        logger.debug(f"Top indices: {top_indices}")
+        logger.debug(f"Top draft losses: {draft_losses[top_indices]}")
+        logger.debug(f"Best probe loss: {best_probe_loss}")
+        logger.debug(f"Best filtered loss: {best_filtered_loss}")
 
         if best_probe_loss < best_filtered_loss:
             return probe_losses
@@ -786,46 +869,6 @@ class GCG:
                 torch.cuda.empty_cache()
 
         return torch.cat(all_loss, dim=0)
-
-    def _convert_to_draft_tokens(self, token_ids: Tensor) -> Tensor:
-        logger.debug(f"token IDs to convert: {token_ids.size()}")
-        decoded_text_list = self.tokenizer.batch_decode(token_ids)
-        assert self.draft_tokenizer, "Draft tokenizer wasn't properly initialized."
-        ret = self.draft_tokenizer(
-            decoded_text_list,
-            add_special_tokens=False,
-            padding=True,
-            return_tensors="pt",
-        )["input_ids"].to(token_ids.device, torch.int64)
-        logger.debug(f"Converted token IDs to convert: {ret.size()}")
-        return ret
-        # logger.debug(f"token IDs to convert: {token_ids.size()}, {token_ids}")
-        # batch_size, seq_length = token_ids.shape
-
-        # # Process each sequence in the batch
-        # converted_tokens = []
-        # for batch_idx in range(batch_size):
-        #     # Decode single sequence
-        #     decoded_text = self.tokenizer.decode(token_ids[batch_idx])
-
-        #     assert self.draft_tokenizer, "Draft tokenizer wasn't properly initialized."
-
-        #     print(str(batch_idx) + ":::::::::::::::")
-        #     print(decoded_text)
-        #     # Convert to draft tokens
-        #     draft_tokens = self.draft_tokenizer(
-        #         decoded_text, add_special_tokens=False, return_tensors="pt"
-        #     )["input_ids"].to(token_ids.device, torch.int64)
-
-        #     print(token_ids[batch_idx])
-        #     print(decoded_text))
-        #     print(draft_tokens)
-        #     converted_tokens.append(draft_tokens)
-
-        # # Stack all sequences back together
-        # ret = torch.cat(converted_tokens, dim=0)
-        # logger.debug(f"Converted token IDs to convert: {ret.size()}, {ret}")
-        return ret
 
 
 # A wrapper around the GCG `run` method that provides a simple API
