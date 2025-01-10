@@ -8,7 +8,7 @@ License](https://img.shields.io/pypi/l/transformer_lens?color=blue)
 
 nanoGCG is a lightweight but full-featured implementation of the GCG (Greedy Coordinate Gradient) algorithm. This implementation can be used to optimize adversarial strings on causal Hugging Face models.
 
-This repo is a fork of nanoGCG with [Probe Sampling](https://github.com/zhaoyiran924/Probe-Sampling?tab=readme-ov-file) implemented. Check out the section below the separator for the README of the original nanoGCG.
+This repo is a fork of nanoGCG with [Probe Sampling](https://github.com/zhaoyiran924/Probe-Sampling?tab=readme-ov-file) implemented. Check out the section below for the original README.
 
 ## Installation
 
