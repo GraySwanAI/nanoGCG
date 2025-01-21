@@ -216,7 +216,8 @@ class GCG:
             self.draft_embedding_layer = self.draft_model.get_input_embeddings()
             if self.draft_tokenizer.pad_token is None:
                 # TODO document why
-                self.draft_tokenizer.pad_token = tokenizer.eos_token
+                # self.draft_tokenizer.pad_token = tokenizer.eos_token
+                self.draft_tokenizer.pad_token = " x"
                 # self.draft_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
             # TODO not sure if needed
             # self.draft_model.eval()
