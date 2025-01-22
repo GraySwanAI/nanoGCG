@@ -6,7 +6,7 @@ import threading
 
 from dataclasses import dataclass
 from tqdm import tqdm
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import transformers
@@ -215,12 +215,9 @@ class GCG:
             logger.debug("Probe sampling enabled.")
             self.draft_embedding_layer = self.draft_model.get_input_embeddings()
             if self.draft_tokenizer.pad_token is None:
-                # TODO document why
-                # self.draft_tokenizer.pad_token = tokenizer.eos_token
+                # Padding is needed because we'll be tokenizing in both target and draft spaces.
+                # TODO: might be okay to use more generic token such as EOS
                 self.draft_tokenizer.pad_token = " x"
-                # self.draft_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-            # TODO not sure if needed
-            # self.draft_model.eval()
 
         if model.dtype in (torch.float32, torch.float64):
             logger.warning(
@@ -392,13 +389,12 @@ class GCG:
                         loss = find_executable_batch_size(
                             self._compute_candidates_loss_original, batch_size
                         )(input_embeds)
+                        current_loss = loss.min().item()
+                        optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
                     else:
-                        loss = find_executable_batch_size(
+                        current_loss, optim_ids = find_executable_batch_size(
                             self._compute_candidates_loss_probe_sampling, batch_size
                         )(input_embeds, sampled_ids)
-
-                    current_loss = loss.min().item()
-                    optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
 
                     logger.debug(
                         f"Current loss: {current_loss}, buffer highest: {buffer.get_highest_loss()}"
@@ -598,7 +594,7 @@ class GCG:
         search_batch_size: int,
         input_embeds: Tensor,
         sampled_ids: Tensor,
-    ) -> Tensor:
+    ) -> Tuple[float, Tensor]:
         """Computes the GCG loss on all candidate token id sequences.
 
         Args:
@@ -772,8 +768,8 @@ class GCG:
         )
 
         # 7. Return best loss between probe set and filtered set
-        best_probe_loss = probe_losses.min()
-        best_filtered_loss = filtered_losses.min()
+        best_probe_loss = probe_losses.min().item()
+        best_filtered_loss = filtered_losses.min().item()
 
         logger.debug(f"Correlation: {alpha}")
         logger.debug(f"Filtered size: {filtered_size}")
@@ -786,7 +782,16 @@ class GCG:
         logger.debug(f"Best probe loss: {best_probe_loss}")
         logger.debug(f"Best filtered loss: {best_filtered_loss}")
 
-        return probe_losses if best_probe_loss < best_filtered_loss else filtered_losses
+        probe_ids = sampled_ids[probe_idxs]
+        filtered_ids = sampled_ids[top_indices]
+        return (
+            (best_probe_loss, probe_ids[probe_losses.argmin()].unsqueeze(0))
+            if best_probe_loss < best_filtered_loss
+            else (
+                best_filtered_loss,
+                filtered_ids[filtered_losses.argmin()].unsqueeze(0),
+            )
+        )
 
     def _compute_candidates_loss_original(
         self,
