@@ -50,7 +50,6 @@ def main():
 
     config = GCGConfig(
         verbosity="DEBUG",
-        retry_limit=3,
     )
 
     result = run(

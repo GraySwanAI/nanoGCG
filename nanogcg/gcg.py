@@ -53,7 +53,6 @@ class GCGConfig:
     verbosity: str = "INFO"
     probe_sampling_r: Optional[int] = None
     probe_sampling_factor: int = 16
-    retry_limit: int = 0
 
 
 @dataclass
@@ -382,38 +381,25 @@ class GCG:
                         dim=1,
                     )
 
-                retry_limit = self.config.retry_limit
-                trial_count = 0
-                while True:
-                    if self.draft_model is None:
-                        loss = find_executable_batch_size(
-                            self._compute_candidates_loss_original, batch_size
-                        )(input_embeds)
-                        current_loss = loss.min().item()
-                        optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
-                    else:
-                        current_loss, optim_ids = find_executable_batch_size(
-                            self._compute_candidates_loss_probe_sampling, batch_size
-                        )(input_embeds, sampled_ids)
+                if self.draft_model is None:
+                    loss = find_executable_batch_size(
+                        self._compute_candidates_loss_original, batch_size
+                    )(input_embeds)
+                    current_loss = loss.min().item()
+                    optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
+                else:
+                    current_loss, optim_ids = find_executable_batch_size(
+                        self._compute_candidates_loss_probe_sampling, batch_size
+                    )(input_embeds, sampled_ids)
 
-                    logger.debug(
-                        f"Current loss: {current_loss}, buffer highest: {buffer.get_highest_loss()}"
-                    )
+                logger.debug(
+                    f"Current loss: {current_loss}, buffer highest: {buffer.get_highest_loss()}"
+                )
 
-                    # Update the buffer based on the loss
-                    if current_loss < buffer.get_highest_loss():
-                        losses.append(current_loss)
-                        buffer.add(current_loss, optim_ids)
-                        break
-                    elif trial_count >= retry_limit:
-                        if buffer.size == 0:
-                            # TODO: should pick the best one from the retries
-                            buffer.add(current_loss, optim_ids)
-                        losses.append(current_loss)
-                        break
-                    else:
-                        trial_count += 1
-                        logger.info(f"Loss not optimized. Retrying #{trial_count}.")
+                # Update the buffer based on the loss
+                losses.append(current_loss)
+                if buffer.size == 0 or current_loss < buffer.get_highest_loss():
+                    buffer.add(current_loss, optim_ids)
 
             optim_ids = buffer.get_best_ids()
             optim_str = tokenizer.batch_decode(optim_ids)[0]
