@@ -34,6 +34,14 @@ if not logger.hasHandlers():
 
 
 @dataclass
+class ProbeSamplingConfig:
+    draft_model: transformers.PreTrainedModel
+    draft_tokenizer: transformers.PreTrainedTokenizer
+    r: int = 8
+    sampling_factor: int = 16
+
+
+@dataclass
 class GCGConfig:
     num_steps: int = 250
     optim_str_init: Union[str, List[str]] = "x x x x x x x x x x x x x x x x x x x x"
@@ -51,8 +59,7 @@ class GCGConfig:
     add_space_before_target: bool = False
     seed: int = None
     verbosity: str = "INFO"
-    probe_sampling_r: Optional[int] = None
-    probe_sampling_factor: int = 16
+    probe_sampling_config: Optional[ProbeSamplingConfig] = None
 
 
 @dataclass
@@ -189,8 +196,6 @@ class GCG:
         model: transformers.PreTrainedModel,
         tokenizer: transformers.PreTrainedTokenizer,
         config: GCGConfig,
-        draft_model: Optional[transformers.PreTrainedModel],
-        draft_tokenizer: Optional[transformers.PreTrainedTokenizer],
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -207,11 +212,13 @@ class GCG:
 
         self.stop_flag = False
 
-        self.draft_model = draft_model
-        self.draft_tokenizer = draft_tokenizer
+        self.draft_model = None
+        self.draft_tokenizer = None
         self.draft_embedding_layer = None
-        if self.draft_model and self.draft_tokenizer:
+        if self.config.probe_sampling_config:
             logger.debug("Probe sampling enabled.")
+            self.draft_model = self.config.probe_sampling_config.draft_model
+            self.draft_tokenizer = self.config.probe_sampling_config.draft_tokenizer
             self.draft_embedding_layer = self.draft_model.get_input_embeddings()
             if self.draft_tokenizer.pad_token is None:
                 # Padding is needed because we'll be tokenizing in both target and draft spaces.
@@ -296,8 +303,13 @@ class GCG:
         self.after_embeds = after_embeds
         self.target_embeds = target_embeds
 
-        if self.draft_model and self.draft_tokenizer and self.draft_embedding_layer:
-            # Tokenize everything that doesn't get optimized for the draft model, if probe sampling is enabled
+        # Initialize components for probe sampling, if enabled.
+        if config.probe_sampling_config:
+            assert (
+                self.draft_model and self.draft_tokenizer and self.draft_embedding_layer
+            ), "Draft model wasn't properly set up."
+
+            # Tokenize everything that doesn't get optimized for the draft model
             draft_before_ids = self.draft_tokenizer(
                 [before_str], padding=False, return_tensors="pt"
             )["input_ids"].to(model.device, torch.int64)
@@ -337,7 +349,6 @@ class GCG:
 
         for _ in tqdm(range(config.num_steps)):
             # Compute the token gradient
-            # torch.Size([1, 20, 50257]) for gpt2, the grad if replacing token i with j of the V.
             optim_ids_onehot_grad = self.compute_token_gradient(optim_ids)
 
             with torch.no_grad():
@@ -381,7 +392,7 @@ class GCG:
                         dim=1,
                     )
 
-                if self.draft_model is None:
+                if self.config.probe_sampling_config is None:
                     loss = find_executable_batch_size(
                         self._compute_candidates_loss_original, batch_size
                     )(input_embeds)
@@ -581,21 +592,27 @@ class GCG:
         input_embeds: Tensor,
         sampled_ids: Tensor,
     ) -> Tuple[float, Tensor]:
-        """Computes the GCG loss on all candidate token id sequences.
+        """Computes the GCG loss using probe sampling (https://arxiv.org/abs/2403.01251).
 
         Args:
             search_batch_size : int
                 the number of candidate sequences to evaluate in a given batch
             input_embeds : Tensor, shape = (search_width, seq_len, embd_dim)
                 the embeddings of the `search_width` candidate sequences to evaluate
+            sampled_ids: Tensor, all candidate token id sequences. Used for further sampling.
+
+        Returns:
+            A tuple of (min_loss: float, corresponding_sequence: Tensor)
+
         """
+        probe_sampling_config = self.config.probe_sampling_config
+        assert probe_sampling_config, "Probe sampling config wasn't set up properly."
 
         B = input_embeds.shape[0]
-        probe_size = B // self.config.probe_sampling_factor
+        probe_size = B // probe_sampling_config.sampling_factor
         probe_idxs = torch.randperm(B)[:probe_size].to(input_embeds.device)
         probe_embeds = input_embeds[probe_idxs]
 
-        # Helper 1 - Will be executed by probe thread below
         def _compute_probe_losses(
             result_queue: queue.Queue, search_batch_size: int, probe_embeds: Tensor
         ) -> None:
@@ -605,7 +622,6 @@ class GCG:
             result_queue.put(("probe", probe_losses))
             logger.debug("Probe thread done.")
 
-        # Will be executed by draft thread below
         def _compute_draft_losses(
             result_queue: queue.Queue,
             search_batch_size: int,
@@ -707,11 +723,13 @@ class GCG:
             result_queue = queue.Queue()
             draft_sampled_ids = _convert_to_draft_tokens(sampled_ids)
 
+            # Step 1. Compute loss of all candidates using the draft model
             draft_thread = threading.Thread(
                 target=_compute_draft_losses,
                 args=(result_queue, search_batch_size, draft_sampled_ids),
             )
 
+            # Step 2. In parallel to 1., compute loss of the probe set on target model
             probe_thread = threading.Thread(
                 target=_compute_probe_losses,
                 args=(result_queue, search_batch_size, probe_embeds),
@@ -731,7 +749,7 @@ class GCG:
         probe_losses = results["probe"]
         draft_losses = results["draft"]
 
-        # Step 4. Calculate agreement score using Spearman correlation
+        # Step 3. Calculate agreement score using Spearman correlation
         draft_probe_losses = draft_losses[probe_idxs]
         rank_correlation = spearmanr(
             probe_losses.cpu().type(torch.float32).numpy(),
@@ -740,20 +758,19 @@ class GCG:
         # normalized from [-1, 1] to [0, 1]
         alpha = (1 + rank_correlation) / 2
 
-        # 5. Filter candidates based on draft model losses
-        R = 8 if self.config.probe_sampling_r is None else self.config.probe_sampling_r
+        # Step 4. Calculate the filtered set and evaluate using the target model.
+        R = probe_sampling_config.r
         filtered_size = int((1 - alpha) * B / R)
         filtered_size = max(1, min(filtered_size, B))
 
         _, top_indices = torch.topk(draft_losses, k=filtered_size, largest=False)
 
-        # 6. Compute losses on filtered set with target model
         filtered_embeds = input_embeds[top_indices]
         filtered_losses = self._compute_candidates_loss_original(
             search_batch_size, filtered_embeds
         )
 
-        # 7. Return best loss between probe set and filtered set
+        # Step 5. Return best loss between probe set and filtered set
         best_probe_loss = probe_losses.min().item()
         best_filtered_loss = filtered_losses.min().item()
 
@@ -866,8 +883,6 @@ def run(
     messages: Union[str, List[dict]],
     target: str,
     config: Optional[GCGConfig] = None,
-    draft_model: Optional[transformers.PreTrainedModel] = None,
-    draft_tokenizer: Optional[transformers.PreTrainedTokenizer] = None,
 ) -> GCGResult:
     """Generates a single optimized string using GCG.
 
@@ -886,6 +901,6 @@ def run(
 
     logger.setLevel(getattr(logging, config.verbosity))
 
-    gcg = GCG(model, tokenizer, config, draft_model, draft_tokenizer)
+    gcg = GCG(model, tokenizer, config)
     result = gcg.run(messages, target)
     return result

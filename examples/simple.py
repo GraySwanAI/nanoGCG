@@ -6,7 +6,7 @@ import argparse
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from nanogcg.gcg import GCGConfig, run
+from nanogcg.gcg import GCGConfig, ProbeSamplingConfig, run
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,19 +37,22 @@ def main():
     ).to(args.device)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
 
-    draft_model = None
-    draft_tokenizer = None
+    probe_sampling_config = None
     if args.probe_sampling:
         draft_model = AutoModelForCausalLM.from_pretrained(
             "openai-community/gpt2", torch_dtype=getattr(torch, args.dtype)
         ).to(args.device)
         draft_tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
-        print(draft_tokenizer)
+        probe_sampling_config = ProbeSamplingConfig(
+            draft_model=draft_model,
+            draft_tokenizer=draft_tokenizer,
+        )
 
     messages = [{"role": "user", "content": args.prompt}]
 
     config = GCGConfig(
         verbosity="DEBUG",
+        probe_sampling_config=probe_sampling_config,
     )
 
     result = run(
@@ -58,12 +61,9 @@ def main():
         messages,
         args.target,
         config,
-        draft_model=draft_model,
-        draft_tokenizer=draft_tokenizer,
     )
 
     messages[-1]["content"] = messages[-1]["content"] + " " + result.best_string
-    print(result.best_string)
 
     input = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, return_tensors="pt"
