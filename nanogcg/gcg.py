@@ -705,6 +705,10 @@ class GCG:
 
                 draft_losses.append(loss)
 
+                del draft_output
+                gc.collect()
+                torch.cuda.empty_cache()
+
             draft_losses = torch.cat(draft_losses)
             result_queue.put(("draft", draft_losses))
             logger.debug("Draft thread done.")
