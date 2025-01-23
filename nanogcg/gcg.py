@@ -634,80 +634,82 @@ class GCG:
             draft_losses = []
             draft_prefix_cache_batch = None
             for i in range(0, B, search_batch_size):
-                batch_size = min(search_batch_size, B - i)
-                draft_sampled_ids_batch = draft_sampled_ids[i : i + batch_size]
+                with torch.no_grad():
+                    batch_size = min(search_batch_size, B - i)
+                    draft_sampled_ids_batch = draft_sampled_ids[i : i + batch_size]
 
-                if self.draft_prefix_cache:
-                    if not draft_prefix_cache_batch or batch_size != search_batch_size:
-                        draft_prefix_cache_batch = [
-                            [
-                                x.expand(batch_size, -1, -1, -1)
-                                for x in self.draft_prefix_cache[i]
+                    if self.draft_prefix_cache:
+                        if (
+                            not draft_prefix_cache_batch
+                            or batch_size != search_batch_size
+                        ):
+                            draft_prefix_cache_batch = [
+                                [
+                                    x.expand(batch_size, -1, -1, -1)
+                                    for x in self.draft_prefix_cache[i]
+                                ]
+                                for i in range(len(self.draft_prefix_cache))
                             ]
-                            for i in range(len(self.draft_prefix_cache))
-                        ]
-                    logger.debug(
-                        self.draft_embedding_layer(draft_sampled_ids_batch).shape
-                    )
-                    logger.debug(draft_sampled_ids_batch.shape)
-                    logger.debug(self.draft_after_embeds.shape)
-                    logger.debug(self.draft_after_embeds.repeat(batch_size, 1, 1).shape)
-                    logger.debug(self.draft_target_embeds.shape)
-                    logger.debug(
-                        self.draft_target_embeds.repeat(batch_size, 1, 1).shape
-                    )
-                    draft_embeds = torch.cat(
-                        [
-                            self.draft_embedding_layer(draft_sampled_ids_batch),
-                            self.draft_after_embeds.repeat(batch_size, 1, 1),
-                            self.draft_target_embeds.repeat(batch_size, 1, 1),
-                        ],
-                        dim=1,
-                    )
-                    draft_output = self.draft_model(
-                        inputs_embeds=draft_embeds,
-                        past_key_values=draft_prefix_cache_batch,
-                    )
-                else:
-                    draft_embeds = torch.cat(
-                        [
-                            self.draft_before_embeds.repeat(batch_size, 1, 1),
-                            self.draft_embedding_layer(draft_sampled_ids_batch),
-                            self.draft_after_embeds.repeat(batch_size, 1, 1),
-                            self.draft_target_embeds.repeat(batch_size, 1, 1),
-                        ],
-                        dim=1,
-                    )
-                    draft_output = self.draft_model(inputs_embeds=draft_embeds)
-
-                draft_logits = draft_output.logits
-                tmp = draft_embeds.shape[1] - self.draft_target_ids.shape[1]
-                shift_logits = draft_logits[..., tmp - 1 : -1, :].contiguous()
-                shift_labels = self.draft_target_ids.repeat(batch_size, 1)
-
-                if self.config.use_mellowmax:
-                    label_logits = torch.gather(
-                        shift_logits, -1, shift_labels.unsqueeze(-1)
-                    ).squeeze(-1)
-                    loss = mellowmax(
-                        -label_logits, alpha=self.config.mellowmax_alpha, dim=-1
-                    )
-                else:
-                    loss = (
-                        torch.nn.functional.cross_entropy(
-                            shift_logits.view(-1, shift_logits.size(-1)),
-                            shift_labels.view(-1),
-                            reduction="none",
+                        logger.debug(
+                            self.draft_embedding_layer(draft_sampled_ids_batch).shape
                         )
-                        .view(batch_size, -1)
-                        .mean(dim=-1)
-                    )
+                        logger.debug(draft_sampled_ids_batch.shape)
+                        logger.debug(self.draft_after_embeds.shape)
+                        logger.debug(
+                            self.draft_after_embeds.repeat(batch_size, 1, 1).shape
+                        )
+                        logger.debug(self.draft_target_embeds.shape)
+                        logger.debug(
+                            self.draft_target_embeds.repeat(batch_size, 1, 1).shape
+                        )
+                        draft_embeds = torch.cat(
+                            [
+                                self.draft_embedding_layer(draft_sampled_ids_batch),
+                                self.draft_after_embeds.repeat(batch_size, 1, 1),
+                                self.draft_target_embeds.repeat(batch_size, 1, 1),
+                            ],
+                            dim=1,
+                        )
+                        draft_output = self.draft_model(
+                            inputs_embeds=draft_embeds,
+                            past_key_values=draft_prefix_cache_batch,
+                        )
+                    else:
+                        draft_embeds = torch.cat(
+                            [
+                                self.draft_before_embeds.repeat(batch_size, 1, 1),
+                                self.draft_embedding_layer(draft_sampled_ids_batch),
+                                self.draft_after_embeds.repeat(batch_size, 1, 1),
+                                self.draft_target_embeds.repeat(batch_size, 1, 1),
+                            ],
+                            dim=1,
+                        )
+                        draft_output = self.draft_model(inputs_embeds=draft_embeds)
 
-                draft_losses.append(loss)
+                    draft_logits = draft_output.logits
+                    tmp = draft_embeds.shape[1] - self.draft_target_ids.shape[1]
+                    shift_logits = draft_logits[..., tmp - 1 : -1, :].contiguous()
+                    shift_labels = self.draft_target_ids.repeat(batch_size, 1)
 
-                # del draft_output
-                # gc.collect()
-                # torch.cuda.empty_cache()
+                    if self.config.use_mellowmax:
+                        label_logits = torch.gather(
+                            shift_logits, -1, shift_labels.unsqueeze(-1)
+                        ).squeeze(-1)
+                        loss = mellowmax(
+                            -label_logits, alpha=self.config.mellowmax_alpha, dim=-1
+                        )
+                    else:
+                        loss = (
+                            torch.nn.functional.cross_entropy(
+                                shift_logits.view(-1, shift_logits.size(-1)),
+                                shift_labels.view(-1),
+                                reduction="none",
+                            )
+                            .view(batch_size, -1)
+                            .mean(dim=-1)
+                        )
+
+                    draft_losses.append(loss)
 
             draft_losses = torch.cat(draft_losses)
             result_queue.put(("draft", draft_losses))
@@ -723,27 +725,26 @@ class GCG:
                 return_tensors="pt",
             )["input_ids"].to(self.draft_model.device, torch.int64)
 
-        with torch.no_grad():
-            result_queue = queue.Queue()
-            draft_sampled_ids = _convert_to_draft_tokens(sampled_ids)
+        result_queue = queue.Queue()
+        draft_sampled_ids = _convert_to_draft_tokens(sampled_ids)
 
-            # Step 1. Compute loss of all candidates using the draft model
-            draft_thread = threading.Thread(
-                target=_compute_draft_losses,
-                args=(result_queue, search_batch_size, draft_sampled_ids),
-            )
+        # Step 1. Compute loss of all candidates using the draft model
+        draft_thread = threading.Thread(
+            target=_compute_draft_losses,
+            args=(result_queue, search_batch_size, draft_sampled_ids),
+        )
 
-            # Step 2. In parallel to 1., compute loss of the probe set on target model
-            probe_thread = threading.Thread(
-                target=_compute_probe_losses,
-                args=(result_queue, search_batch_size, probe_embeds),
-            )
+        # Step 2. In parallel to 1., compute loss of the probe set on target model
+        probe_thread = threading.Thread(
+            target=_compute_probe_losses,
+            args=(result_queue, search_batch_size, probe_embeds),
+        )
 
-            draft_thread.start()
-            probe_thread.start()
+        draft_thread.start()
+        probe_thread.start()
 
-            draft_thread.join()
-            probe_thread.join()
+        draft_thread.join()
+        probe_thread.join()
 
         results = {}
         while not result_queue.empty():
