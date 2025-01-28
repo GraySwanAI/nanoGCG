@@ -16,6 +16,7 @@ from scipy.stats import spearmanr
 
 from nanogcg.utils import (
     INIT_CHARS,
+    configure_pad_token,
     find_executable_batch_size,
     get_nonascii_toks,
     mellowmax,
@@ -212,9 +213,7 @@ class GCG:
             self.draft_tokenizer = self.config.probe_sampling_config.draft_tokenizer
             self.draft_embedding_layer = self.draft_model.get_input_embeddings()
             if self.draft_tokenizer.pad_token is None:
-                # Padding is needed because we'll be tokenizing in both target and draft spaces.
-                # TODO: might be okay to use more generic token such as EOS
-                self.draft_tokenizer.pad_token = " x"
+                configure_pad_token(self.draft_tokenizer)
 
         if model.dtype in (torch.float32, torch.float64):
             logger.warning(f"Model is in {model.dtype}. Use a lower precision data type, if possible, for much faster optimization.")
