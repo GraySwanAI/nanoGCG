@@ -17,8 +17,11 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
+    "protobuf",
+    "scipy>=1.7.0",
+    "sentencepiece>=0.2.0",
     "torch>=2.0",
-    "transformers>=4.4",
+    "transformers>=4.4,<=4.47.1", # FIXME: Use `transformers.Cache` class for `past_key_values`
 ]
 
 [tool.setuptools]

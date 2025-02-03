@@ -3,6 +3,7 @@ import gc
 import inspect
 import torch
 from torch import Tensor
+from transformers import PreTrainedTokenizerBase
 
 INIT_CHARS = [
     ".", ",", "!", "?", ";", ":", "(", ")", "[", "]", "{", "}",
@@ -112,3 +113,19 @@ def find_executable_batch_size(function: callable = None, starting_batch_size: i
                     raise
 
     return decorator
+
+def configure_pad_token(tokenizer: PreTrainedTokenizerBase) -> PreTrainedTokenizerBase:
+    """Checks if the (Hugging Face) tokenizer has a padding token and sets it if not present.
+
+    Borrowed from https://github.com/EleutherAI/lm-evaluation-harness/blob/5c006ed417a2f4d01248d487bcbd493ebe3e5edd/lm_eval/models/utils.py#L624
+    """
+    if tokenizer.pad_token:
+        return tokenizer
+
+    if tokenizer.unk_token:
+        tokenizer.pad_token_id = tokenizer.unk_token_id
+    elif tokenizer.eos_token:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    else:
+        tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
+    return tokenizer
