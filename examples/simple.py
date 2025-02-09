@@ -8,7 +8,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import nanogcg
-from nanogcg.gcg import ProbeSamplingConfig
+from nanogcg import GCGConfig, ProbeSamplingConfig
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,7 +40,7 @@ def main():
 
     messages = [{"role": "user", "content": args.prompt}]
 
-    config = nanogcg.GCGConfig(
+    config = GCGConfig(
         verbosity="DEBUG",
         probe_sampling_config=probe_sampling_config,
     )

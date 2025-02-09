@@ -26,7 +26,7 @@ pip install -e .
 
 ## Overview
 
-The GCG algorithm was introduced in [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. This implementation implements the original algorithm and supports several modifications that can improve performance, including multi-position token swapping [2], a historical attack buffer [2][3], the mellowmax loss function [4][5], and probe sampling [6].
+The GCG algorithm was introduced in [Universal and Transferrable Attacks on Aligned Language Models](https://arxiv.org/pdf/2307.15043) [1] by Andy Zou, Zifan Wang, Nicholas Carlini, Milad Nasr, Zico Kolter, and Matt Fredrikson. nanoGCG implements the original algorithm and supports several modifications that can improve performance, including multi-position token swapping [2], a historical attack buffer [2][3], the mellowmax loss function [4][5], and probe sampling [6].
 
 ## Usage
 
@@ -93,7 +93,7 @@ The parameters that can be configured and their defaults are:
 
 - `verbosity: str = "INFO"` - the reported logging error level (e.g. "ERROR", "WARNING", "INFO")
 
-- `probe_sampling_config: ProbeSamplingConfig = None` - A collection of configuratble parameters for probe sampling. See the example below.
+- `probe_sampling_config: ProbeSamplingConfig = None` - A collection of configurable parameters for probe sampling. See the example below.
 
 Note that the default nanoGCG configuration will run the GCG algorithm as described in the [original paper](https://arxiv.org/pdf/2307.15043) without algorithmic changes like multi-position token swapping and mellowmax.
 
@@ -136,13 +136,13 @@ You can enable probe sampling by specifying the `probe_sampling_config` with app
 import nanogcg
 import torch
 
-from nanogcg import GCGConfig
+from nanogcg import GCGConfig, ProbeSamplingConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 draft_model = AutoModelForCausalLM.from_pretrained("openai-community/gpt2", torch_dtype=torch.bfloat16).to("cuda")
 draft_tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
 
-probe_sampling_config = nanogcg.gcg.ProbeSamplingConfig(
+probe_sampling_config = ProbeSamplingConfig(
     draft_model=draft_model,
     draft_tokenizer=draft_tokenizer,
     r=64,
