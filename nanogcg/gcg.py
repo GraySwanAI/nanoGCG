@@ -281,12 +281,8 @@ class GCG:
 
             # Tokenize everything that doesn't get optimized for the draft model
             draft_before_ids = self.draft_tokenizer([before_str], padding=False, return_tensors="pt")["input_ids"].to(model.device, torch.int64)
-            draft_after_ids = self.draft_tokenizer([after_str], add_special_tokens=False, return_tensors="pt")["input_ids"].to(
-                model.device, torch.int64
-            )
-            self.draft_target_ids = self.draft_tokenizer([target], add_special_tokens=False, return_tensors="pt")["input_ids"].to(
-                model.device, torch.int64
-            )
+            draft_after_ids = self.draft_tokenizer([after_str], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device, torch.int64)
+            self.draft_target_ids = self.draft_tokenizer([target], add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device, torch.int64)
 
             (
                 self.draft_before_embeds,
@@ -356,7 +352,7 @@ class GCG:
                     optim_ids = sampled_ids[loss.argmin()].unsqueeze(0)
                 else:
                     current_loss, optim_ids = find_executable_batch_size(self._compute_candidates_loss_probe_sampling, batch_size)(
-                        input_embeds, sampled_ids
+                        input_embeds, sampled_ids,
                     )
 
                 # Update the buffer based on the loss
@@ -497,6 +493,60 @@ class GCG:
         optim_ids_onehot_grad = torch.autograd.grad(outputs=[loss], inputs=[optim_ids_onehot])[0]
 
         return optim_ids_onehot_grad
+
+    def _compute_candidates_loss_original(
+        self,
+        search_batch_size: int,
+        input_embeds: Tensor,
+    ) -> Tensor:
+        """Computes the GCG loss on all candidate token id sequences.
+
+        Args:
+            search_batch_size : int
+                the number of candidate sequences to evaluate in a given batch
+            input_embeds : Tensor, shape = (search_width, seq_len, embd_dim)
+                the embeddings of the `search_width` candidate sequences to evaluate
+        """
+        all_loss = []
+        prefix_cache_batch = []
+
+        for i in range(0, input_embeds.shape[0], search_batch_size):
+            with torch.no_grad():
+                input_embeds_batch = input_embeds[i:i + search_batch_size]
+                current_batch_size = input_embeds_batch.shape[0]
+
+                if self.prefix_cache:
+                    if not prefix_cache_batch or current_batch_size != search_batch_size:
+                        prefix_cache_batch = [[x.expand(current_batch_size, -1, -1, -1) for x in self.prefix_cache[i]] for i in range(len(self.prefix_cache))]
+
+                    outputs = self.model(inputs_embeds=input_embeds_batch, past_key_values=prefix_cache_batch, use_cache=True)
+                else:
+                    outputs = self.model(inputs_embeds=input_embeds_batch)
+
+                logits = outputs.logits
+
+                tmp = input_embeds.shape[1] - self.target_ids.shape[1]
+                shift_logits = logits[..., tmp-1:-1, :].contiguous()
+                shift_labels = self.target_ids.repeat(current_batch_size, 1)
+
+                if self.config.use_mellowmax:
+                    label_logits = torch.gather(shift_logits, -1, shift_labels.unsqueeze(-1)).squeeze(-1)
+                    loss = mellowmax(-label_logits, alpha=self.config.mellowmax_alpha, dim=-1)
+                else:
+                    loss = torch.nn.functional.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), reduction="none")
+
+                loss = loss.view(current_batch_size, -1).mean(dim=-1)
+                all_loss.append(loss)
+
+                if self.config.early_stop:
+                    if torch.any(torch.all(torch.argmax(shift_logits, dim=-1) == shift_labels, dim=-1)).item():
+                        self.stop_flag = True
+
+                del outputs
+                gc.collect()
+                torch.cuda.empty_cache()
+
+        return torch.cat(all_loss, dim=0)
 
     def _compute_candidates_loss_probe_sampling(
         self,
@@ -670,60 +720,6 @@ class GCG:
                 filtered_ids[filtered_losses.argmin()].unsqueeze(0),
             )
         )
-
-    def _compute_candidates_loss_original(
-        self,
-        search_batch_size: int,
-        input_embeds: Tensor,
-    ) -> Tensor:
-        """Computes the GCG loss on all candidate token id sequences.
-
-        Args:
-            search_batch_size : int
-                the number of candidate sequences to evaluate in a given batch
-            input_embeds : Tensor, shape = (search_width, seq_len, embd_dim)
-                the embeddings of the `search_width` candidate sequences to evaluate
-        """
-        all_loss = []
-        prefix_cache_batch = []
-
-        for i in range(0, input_embeds.shape[0], search_batch_size):
-            with torch.no_grad():
-                input_embeds_batch = input_embeds[i:i + search_batch_size]
-                current_batch_size = input_embeds_batch.shape[0]
-
-                if self.prefix_cache:
-                    if not prefix_cache_batch or current_batch_size != search_batch_size:
-                        prefix_cache_batch = [[x.expand(current_batch_size, -1, -1, -1) for x in self.prefix_cache[i]] for i in range(len(self.prefix_cache))]
-
-                    outputs = self.model(inputs_embeds=input_embeds_batch, past_key_values=prefix_cache_batch, use_cache=True)
-                else:
-                    outputs = self.model(inputs_embeds=input_embeds_batch)
-
-                logits = outputs.logits
-
-                tmp = input_embeds.shape[1] - self.target_ids.shape[1]
-                shift_logits = logits[..., tmp-1:-1, :].contiguous()
-                shift_labels = self.target_ids.repeat(current_batch_size, 1)
-
-                if self.config.use_mellowmax:
-                    label_logits = torch.gather(shift_logits, -1, shift_labels.unsqueeze(-1)).squeeze(-1)
-                    loss = mellowmax(-label_logits, alpha=self.config.mellowmax_alpha, dim=-1)
-                else:
-                    loss = torch.nn.functional.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1), reduction="none")
-
-                loss = loss.view(current_batch_size, -1).mean(dim=-1)
-                all_loss.append(loss)
-
-                if self.config.early_stop:
-                    if torch.any(torch.all(torch.argmax(shift_logits, dim=-1) == shift_labels, dim=-1)).item():
-                        self.stop_flag = True
-
-                del outputs
-                gc.collect()
-                torch.cuda.empty_cache()
-
-        return torch.cat(all_loss, dim=0)
 
 
 # A wrapper around the GCG `run` method that provides a simple API

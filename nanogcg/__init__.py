@@ -15,4 +15,4 @@ result = nanogcg.run(model, tokenizer, message, target)
 For more detailed information, see the GitHub repository: https://github.com/GraySwanAI/nanoGCG/tree/main
 """
 
-from .gcg import GCGConfig, run
+from .gcg import GCGConfig, ProbeSamplingConfig, run
