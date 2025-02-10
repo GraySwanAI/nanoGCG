@@ -393,10 +393,14 @@ class GCG:
 
         if isinstance(config.optim_str_init, str):
             init_optim_ids = tokenizer(config.optim_str_init, add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device)
+            optim_ids_len = init_optim_ids.shape[1]
+            logger.info(f"Optimization string length is {optim_ids_len}")
             if config.buffer_size > 1:
-                init_buffer_ids = tokenizer(INIT_CHARS, add_special_tokens=False, return_tensors="pt")["input_ids"].squeeze().to(model.device)
-                init_indices = torch.randint(0, init_buffer_ids.shape[0], (config.buffer_size - 1, init_optim_ids.shape[1]))
-                init_buffer_ids = torch.cat([init_optim_ids, init_buffer_ids[init_indices]], dim=0)
+                init_indices = torch.randint(0, len(INIT_CHARS), ((config.buffer_size - 1)*optim_ids_len, ))
+                init_str = [INIT_CHARS[i] for i in init_indices]
+                init_str = [" ".join(init_str[i:i+optim_ids_len]) for i in range(0, len(init_str), optim_ids_len)]
+                init_buffer_ids = tokenizer(init_str, add_special_tokens=False, return_tensors="pt")["input_ids"].to(model.device)
+                init_buffer_ids = torch.cat([init_buffer_ids, init_optim_ids], dim=0)
             else:
                 init_buffer_ids = init_optim_ids
 
