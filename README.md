@@ -179,7 +179,7 @@ nanoGCG is licensed under the MIT license.
 
 ```
 [1] https://arxiv.org/pdf/2307.15043
-[2] https://blog.haizelabs.com/posts/acg
+[2] https://www.haizelabs.com/technology/making-a-sota-adversarial-attack-on-llms-38x-faster
 [3] https://arxiv.org/pdf/2402.12329
 [4] https://confirmlabs.org/posts/TDC2023
 [5] https://arxiv.org/pdf/1612.05628
